@@ -13,6 +13,7 @@ import {
 } from '../ai/ai-router.service';
 import { getCropOptionByType } from '../../config/crop-options';
 import { includesStr } from '../../common/utils/string';
+import { matchProductAdvanced } from '../../common/utils/product-matcher';
 import { ReferenceData } from '../ai/ai-provider.interface';
 
 const MAX_REFERENCE_ITEMS = 7;
@@ -264,9 +265,7 @@ export class DiagnosisProcessor extends WorkerHost {
         [];
 
       for (const pName of extractedProducts) {
-        const product = allProducts.find(
-          (p) => includesStr(p.name, pName) || includesStr(pName, p.name),
-        );
+        const product = matchProductAdvanced(pName, allProducts);
         if (product && !validProductIds.includes(product.id)) {
           validProductIds.push(product.id);
           reasonsMap[product.id] =
