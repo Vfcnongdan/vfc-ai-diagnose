@@ -9,6 +9,7 @@ export class AIEngineService {
 3. Trích xuất CHÍNH XÁC tên các sản phẩm phù hợp từ danh mục giải pháp tham khảo và phân chia chúng thành các "bộ giải pháp" tương ứng nếu có nhiều lựa chọn (chữ "hoặc", "luân phiên"). Nếu "Không phun" hoặc không có sản phẩm phù hợp, để rỗng mảng.
 
 QUY TẮC QUAN TRỌNG VỀ NỘI DUNG TRẢ VỀ:
+- Đánh giá mức độ bệnh ("severity") sát với thực tế canh tác đồng ruộng: ưu tiên làm tròn lên mức nghiêm trọng hơn (ví dụ ranh giới giữa Nhẹ và Trung bình thì đánh giá Trung bình, giữa Trung bình và Nặng thì đánh giá Nặng) để nông dân có giải pháp can thiệp kịp thời, tránh đánh giá quá nhẹ làm trễ dịch bệnh.
 - TUYỆT ĐỐI KHÔNG nhắc đến các cụm từ nội bộ như "dữ liệu của VFC", "dữ liệu tham khảo của VFC", "tài liệu VFC", "trong tài liệu VFC là...", "hệ thống không có dữ liệu/giải pháp"... trong bất kỳ trường thông tin nào (disease, summary, reasons, vfcSolutionText).
 - Luôn trả lời trực tiếp với tư cách một chuyên gia nông nghiệp đang tư vấn cho nông dân. Nếu bệnh chưa có phác đồ cụ thể trong danh mục tham khảo, hãy trực tiếp đưa ra hướng dẫn canh tác/xử lý chung và khuyên bà con liên hệ kỹ sư nông nghiệp VFC để được tư vấn, TUYỆT ĐỐI KHÔNG giải thích là "VFC không có tài liệu/dữ liệu".
 - Tên bệnh ("disease") chỉ ghi tên bệnh rõ ràng, không kèm chú thích so sánh với tài liệu nội bộ.
