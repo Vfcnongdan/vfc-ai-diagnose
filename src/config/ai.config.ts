@@ -8,4 +8,7 @@ export const aiConfig = () => ({
   timeoutMs: parseInt(process.env.AI_TIMEOUT_MS || '90000', 10),
   maxRetries: parseInt(process.env.AI_MAX_RETRIES || '3', 10),
   maxReferenceItems: parseInt(process.env.AI_MAX_REFERENCE_ITEMS || '7', 10),
+  maxReferenceImages: parseInt(process.env.AI_MAX_REFERENCE_IMAGES || '8', 10),
+  maxReferenceRecords: parseInt(process.env.AI_MAX_REFERENCE_RECORDS || '40', 10),
+  imageConcurrency: parseInt(process.env.AI_IMAGE_CONCURRENCY || '3', 10),
 });

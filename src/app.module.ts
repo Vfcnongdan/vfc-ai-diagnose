@@ -4,6 +4,7 @@ import { BullModule } from '@nestjs/bullmq';
 import { LoggerModule } from 'nestjs-pino';
 
 import { getRedisConnectionOptions } from './config/redis.config';
+import { aiConfig } from './config/ai.config';
 import { SecurityModule } from './common/security/security.module';
 import { PrismaModule } from './modules/prisma/prisma.module';
 import { DiagnosisModule } from './modules/diagnosis/diagnosis.module';
@@ -14,8 +15,11 @@ import { HealthModule } from './modules/health/health.module';
 
 @Module({
   imports: [
-    // Global environment config
-    ConfigModule.forRoot({ isGlobal: true }),
+    // Global environment config with custom typed loaders
+    ConfigModule.forRoot({
+      isGlobal: true,
+      load: [aiConfig],
+    }),
 
     // Structured logging with Pino
     LoggerModule.forRoot({

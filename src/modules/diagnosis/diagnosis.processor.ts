@@ -1,6 +1,7 @@
 import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { Job } from 'bullmq';
 import { Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { DiagnosisStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { ImageService } from '../image/image.service';
@@ -15,8 +16,10 @@ import { getCropOptionByType } from '../../config/crop-options';
 import { includesStr } from '../../common/utils/string';
 import { matchProductAdvanced } from '../../common/utils/product-matcher';
 import { ReferenceData } from '../ai/ai-provider.interface';
-
-const MAX_REFERENCE_ITEMS = 7;
+import {
+  selectDiverseImages,
+  mapConcurrent,
+} from '../../common/utils/reference-sampler';
 
 @Processor('diagnosis')
 export class DiagnosisProcessor extends WorkerHost {
@@ -28,6 +31,7 @@ export class DiagnosisProcessor extends WorkerHost {
     private imageValidator: ImageValidatorService,
     private aiEngine: AIEngineService,
     private aiRouter: AIRouterService,
+    private config: ConfigService,
   ) {
     super();
   }
@@ -230,21 +234,60 @@ export class DiagnosisProcessor extends WorkerHost {
         `[Reference Data] Diagnosis: ${diagnosisId} | Found ${relevantDiseases.length} matching records`,
       );
 
-      if (relevantDiseases.length > MAX_REFERENCE_ITEMS) {
-        relevantDiseases = relevantDiseases
-          .sort(() => Math.random() - 0.5)
-          .slice(0, MAX_REFERENCE_ITEMS);
-      }
+      const maxRecords =
+        Number(
+          this.config.get('AI_MAX_REFERENCE_RECORDS') ??
+            this.config.get('maxReferenceRecords') ??
+            40,
+        ) || 40;
+      const maxImages =
+        Number(
+          this.config.get('AI_MAX_REFERENCE_IMAGES') ??
+            this.config.get('maxReferenceImages') ??
+            8,
+        ) || 8;
+      const concurrency =
+        Number(
+          this.config.get('AI_IMAGE_CONCURRENCY') ??
+            this.config.get('imageConcurrency') ??
+            3,
+        ) || 3;
 
-      const referenceData: ReferenceData[] = [];
-      for (const d of relevantDiseases) {
-        let b64: string | null = null;
-        if (d.imageUrls && d.imageUrls.length > 0) {
-          b64 = await this.imageService.fetchAndOptimize(d.imageUrls[0]);
+      // 1. Giữ toàn bộ text records (áp dụng trần an toàn maxRecords để bảo vệ token)
+      const textRecords =
+        relevantDiseases.length > maxRecords
+          ? relevantDiseases.slice(0, maxRecords)
+          : relevantDiseases;
+
+      // 2. Chọn các mẫu ảnh đại diện bằng Diversity Sampling (Round-Robin theo pestDisease & severityLevel)
+      const recordsToFetchImages = selectDiverseImages(textRecords, maxImages);
+
+      this.logger.log(
+        `[Diversity Sampling] Diagnosis: ${diagnosisId} | Selected ${recordsToFetchImages.length}/${textRecords.length} diverse reference images`,
+      );
+
+      // 3. Tải và resize ảnh song song có kiểm soát concurrency (mặc định 3 luồng)
+      const imageMap = new Map<string, string>();
+      await mapConcurrent(recordsToFetchImages, concurrency, async (record) => {
+        if (record.imageUrls && record.imageUrls.length > 0) {
+          const b64 = await this.imageService.fetchAndOptimize(
+            record.imageUrls[0],
+          );
+          if (b64) {
+            imageMap.set(record.id, b64);
+          }
         }
-        const text = `- Bệnh: ${d.detail} (${d.pestDisease})\n- Mức độ: ${d.severityLevel}\n- Mô tả: ${d.description}\n- Giải pháp điều trị: ${d.vfcSolution}`;
-        referenceData.push({ text, base64Image: b64 });
-      }
+      });
+
+      // 4. Cấu trúc referenceData với nhãn ID rõ ràng để AI đối chiếu chính xác
+      const referenceData: ReferenceData[] = textRecords.map((d, index) => {
+        const b64 = imageMap.get(d.id) || null;
+        const hasImgNotice = b64
+          ? ' [CÓ ẢNH ĐỐI CHỨNG ĐÍNH KÈM BÊN DƯỚI]'
+          : ' [CHỈ THAM KHẢO MÔ TẢ TRIỆU CHỨNG VĂN BẢN]';
+        const text = `[Mẫu tham chiếu #${index + 1}${hasImgNotice}]\n- Bệnh: ${d.detail} (${d.pestDisease})\n- Mức độ: ${d.severityLevel}\n- Mô tả triệu chứng: ${d.description}\n- Giải pháp điều trị: ${d.vfcSolution}`;
+        return { text, base64Image: b64 };
+      });
 
       const promptText = this.aiEngine.buildPrompt(cropType);
 
