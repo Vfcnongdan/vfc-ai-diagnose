@@ -2,11 +2,17 @@ import { Injectable } from '@nestjs/common';
 
 @Injectable()
 export class AIEngineService {
-  buildPrompt(cropType?: string): string {
+  buildPrompt(cropType?: string, availableStages?: string[]): string {
+    const stagesHint =
+      availableStages && availableStages.length > 0
+        ? `\n- Giai đoạn sinh trưởng chuẩn của cây ${cropType || ''}: ${availableStages.join(', ')}.`
+        : '';
+
     return `Bạn là chuyên gia nông nghiệp của VFC. Hãy phân tích hình ảnh cây trồng của nông dân${cropType ? ` (loại: ${cropType})` : ''} và tham khảo danh mục bệnh/giải pháp được cung cấp để:
 1. Đưa ra chẩn đoán chuyên môn chính xác về tên bệnh tiếng Việt phổ thông (nhóm nấm, vi khuẩn hoặc sâu hại gây bệnh), mức độ nghiêm trọng.
-2. Đề xuất hướng xử lý kỹ thuật rõ ràng, thiết thực và hữu ích cho bà con nông dân.
-3. Trích xuất CHÍNH XÁC tên các sản phẩm phù hợp từ danh mục giải pháp tham khảo và phân chia chúng thành các "bộ giải pháp" tương ứng nếu có nhiều lựa chọn (chữ "hoặc", "luân phiên"). Nếu "Không phun" hoặc không có sản phẩm phù hợp, để rỗng mảng.
+2. Nhận diện giai đoạn sinh trưởng hiện tại của cây trồng từ hình ảnh trực quan (lá, thân, cành, nụ/hoa, trái, hạt...) hoặc suy luận từ tính chất tổn thương bệnh học.
+3. Đề xuất hướng xử lý kỹ thuật rõ ràng, thiết thực và hữu ích cho bà con nông dân.
+4. Trích xuất CHÍNH XÁC tên các sản phẩm phù hợp từ danh mục giải pháp tham khảo và phân chia chúng thành các "bộ giải pháp" tương ứng nếu có nhiều lựa chọn (chữ "hoặc", "luân phiên"). Nếu "Không phun" hoặc không có sản phẩm phù hợp, để rỗng mảng.
 
 QUY TẮC QUAN TRỌNG VỀ NỘI DUNG TRẢ VỀ:
 - NGUYÊN TẮC NGÔN NGỮ LÂM SÀNG & KHUYẾN NÔNG THỰC ĐỊA (CHỐNG BẮT BẺ CHUYÊN MÔN):
@@ -19,6 +25,7 @@ QUY TẮC QUAN TRỌNG VỀ NỘI DUNG TRẢ VỀ:
   + Đối với mẫu chỉ có văn bản: hãy phân tích triệu chứng thực tế quan sát được trên ảnh nông dân và so khớp chéo với các đặc điểm bệnh học được mô tả để xác định bệnh chính xác ngay cả khi danh mục không có ảnh đối chứng.
   + Sau khi đã xác định được bệnh phù hợp nhất, BẮT BUỘC trích xuất chính xác tên các sản phẩm VFC từ mục 'Giải pháp điều trị' của mẫu tham chiếu tương ứng vào danh sách "solutionSets" và giải thích công dụng trong "reasons".
 - Đánh giá mức độ bệnh ("severity") sát với thực tế canh tác đồng ruộng: ưu tiên làm tròn lên mức nghiêm trọng hơn (ví dụ ranh giới giữa Nhẹ và Trung bình thì đánh giá Trung bình, giữa Trung bình và Nặng thì đánh giá Nặng) để nông dân có giải pháp can thiệp kịp thời, tránh đánh giá quá nhẹ làm trễ dịch bệnh.
+- Giai đoạn sinh trưởng ("growthStage"): Hãy nhận diện giai đoạn của cây dựa trên các dấu hiệu nhìn thấy trên ảnh${stagesHint}.
 - TUYỆT ĐỐI KHÔNG nhắc đến các cụm từ nội bộ như "dữ liệu của VFC", "dữ liệu tham khảo của VFC", "tài liệu VFC", "trong tài liệu VFC là...", "hệ thống không có dữ liệu/giải pháp"... trong bất kỳ trường thông tin nào (disease, summary, reasons, vfcSolutionText).
 - Luôn trả lời trực tiếp với tư cách một chuyên gia nông nghiệp đang tư vấn cho nông dân. Nếu bệnh chưa có phác đồ cụ thể trong danh mục tham khảo, hãy trực tiếp đưa ra hướng dẫn canh tác/xử lý chung và khuyên bà con liên hệ kỹ sư nông nghiệp VFC để được tư vấn, TUYỆT ĐỐI KHÔNG giải thích là "VFC không có tài liệu/dữ liệu".
 - Tên bệnh ("disease") chỉ ghi tên bệnh rõ ràng, không kèm chú thích so sánh với tài liệu nội bộ.
@@ -26,6 +33,7 @@ QUY TẮC QUAN TRỌNG VỀ NỘI DUNG TRẢ VỀ:
 Trả về kết quả dưới dạng JSON thuần túy (không có markdown) với format: 
 { 
   "disease": "tên bệnh", 
+  "growthStage": "giai đoạn sinh trưởng phát hiện được từ ảnh",
   "severity": "mức độ bệnh", 
   "summary": "tóm tắt ngắn gọn hướng xử lý chuyên môn", 
   "confidence": 0.9,

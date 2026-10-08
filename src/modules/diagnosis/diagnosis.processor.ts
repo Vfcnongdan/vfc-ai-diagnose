@@ -20,6 +20,7 @@ import {
   selectDiverseImages,
   mapConcurrent,
 } from '../../common/utils/reference-sampler';
+import { aggregateDiseases } from '../../common/utils/disease-aggregator';
 
 @Processor('diagnosis')
 export class DiagnosisProcessor extends WorkerHost {
@@ -51,12 +52,19 @@ export class DiagnosisProcessor extends WorkerHost {
       `[BullMQ Worker] Processing job ${job.id} (${job.name}) for diagnosis: ${diagnosisId}`,
     );
 
-    // ─── Case 1: Stage confirmed job ──────────────────────────────────────────
+    // Lấy cấu hình các giai đoạn chuẩn để hỗ trợ AI nhận diện
+    const cropOption = await getCropOptionByType(cropType, this.prisma);
+    const allowedStages = cropOption?.growthStages ?? [];
+    const allowedPestDiseases = cropOption?.pestDiseases ?? [];
+    const allowedSeverityLevels = cropOption?.severityLevels ?? [];
+
+    // ─── Case 1: Stage confirmed job (hỗ trợ legacy/re-try nếu có) ───────────
     if (job.name === 'process-with-stage' || growthStage) {
       await this.runDiagnosisPipeline(
         diagnosisId,
         base64Images,
         cropType,
+        allowedStages,
         growthStage,
         detectedPestDisease,
         detectedSeverityLevel,
@@ -66,11 +74,6 @@ export class DiagnosisProcessor extends WorkerHost {
 
     // ─── Case 2: New submission with image validation ─────────────────────────
     try {
-      const cropOption = await getCropOptionByType(cropType, this.prisma);
-      const allowedStages = cropOption?.growthStages ?? [];
-      const allowedPestDiseases = cropOption?.pestDiseases ?? [];
-      const allowedSeverityLevels = cropOption?.severityLevels ?? [];
-
       this.logger.log(
         `[Validation Start] Diagnosis: ${diagnosisId} | Crop: ${cropType}`,
       );
@@ -123,35 +126,13 @@ export class DiagnosisProcessor extends WorkerHost {
         return;
       }
 
-      // Check if plant has growth stage choices
-      if (allowedStages.length > 0) {
-        const awaitingPayload = {
-          awaitingStage: true,
-          availableStages: allowedStages,
-          detectedGrowthStage: validationResult.detectedGrowthStage,
-          detectedPestDisease: validationResult.detectedPestDisease,
-          detectedSeverityLevel: validationResult.detectedSeverityLevel,
-        };
-
-        await this.prisma.plantDiagnosis.update({
-          where: { id: diagnosisId },
-          data: {
-            rawAiResponse: awaitingPayload,
-            status: DiagnosisStatus.DONE, // Client recognizes awaitingStage in rawAiResponse
-          },
-        });
-
-        this.logger.log(
-          `[Validation AWAITING_STAGE] Diagnosis: ${diagnosisId} | Stages: ${allowedStages.length}`,
-        );
-        return;
-      }
-
-      // If no stage selection needed, run diagnosis directly
+      // ─── Chạy THẲNG vào pipeline chẩn đoán (1-step Instant Diagnosis) ────────
+      // KHÔNG dừng lại bắt nông dân chọn stage nữa. AI sẽ tự chẩn đoán bệnh & nhận diện stage.
       await this.runDiagnosisPipeline(
         diagnosisId,
         base64Images,
         cropType,
+        allowedStages,
         validationResult.detectedGrowthStage ?? undefined,
         validationResult.detectedPestDisease ?? undefined,
         validationResult.detectedSeverityLevel ?? undefined,
@@ -173,12 +154,13 @@ export class DiagnosisProcessor extends WorkerHost {
     diagnosisId: string,
     base64Images: string[],
     cropType?: string,
+    allowedStages: string[] = [],
     growthStage?: string,
     pestDisease?: string,
     severityLevel?: string,
   ): Promise<void> {
     this.logger.log(
-      `[AI Diagnosis Start] Diagnosis: ${diagnosisId} | Crop: ${cropType} | Stage: ${growthStage ?? 'any'} | Pest: ${pestDisease ?? 'any'} | Severity: ${severityLevel ?? 'any'}`,
+      `[AI Diagnosis Start] Diagnosis: ${diagnosisId} | Crop: ${cropType} | Advisory Stage: ${growthStage ?? 'any'}`,
     );
 
     try {
@@ -187,51 +169,24 @@ export class DiagnosisProcessor extends WorkerHost {
         select: { id: true, name: true },
       });
 
-      // Query reference data
-      const baseWhere: Prisma.PlanStageDiseaseWhereInput = {
-        cropType: cropType
-          ? { equals: cropType, mode: 'insensitive' }
-          : undefined,
-        growthStage: growthStage
-          ? { equals: growthStage, mode: 'insensitive' }
-          : undefined,
-      };
-
-      let relevantDiseases = await this.prisma.planStageDisease.findMany({
-        where: baseWhere,
+      // 1. Query toàn bộ bệnh của loại cây này (KHÔNG lọc cứng theo growthStage / severityLevel trong SQL)
+      const rawDiseases = await this.prisma.planStageDisease.findMany({
+        where: {
+          cropType: cropType
+            ? { equals: cropType, mode: 'insensitive' }
+            : undefined,
+        },
       });
 
-      if (pestDisease) {
-        const filtered = await this.prisma.planStageDisease.findMany({
-          where: {
-            ...baseWhere,
-            pestDisease: { equals: pestDisease, mode: 'insensitive' },
-          },
-        });
-        if (filtered.length > 0) relevantDiseases = filtered;
-      }
+      this.logger.log(
+        `[Reference Data] Diagnosis: ${diagnosisId} | Found ${rawDiseases.length} total records for crop: ${cropType}`,
+      );
 
-      if (severityLevel) {
-        const pestWhere = pestDisease
-          ? {
-              ...baseWhere,
-              pestDisease: {
-                equals: pestDisease,
-                mode: 'insensitive' as const,
-              },
-            }
-          : baseWhere;
-        const filtered = await this.prisma.planStageDisease.findMany({
-          where: {
-            ...pestWhere,
-            severityLevel: { equals: severityLevel, mode: 'insensitive' },
-          },
-        });
-        if (filtered.length > 0) relevantDiseases = filtered;
-      }
+      // 2. Gom nhóm theo thực thể bệnh duy nhất & khử trùng lặp giải pháp VFC (In-Memory Aggregator)
+      const aggregatedDiseases = aggregateDiseases(rawDiseases, growthStage);
 
       this.logger.log(
-        `[Reference Data] Diagnosis: ${diagnosisId} | Found ${relevantDiseases.length} matching records`,
+        `[Disease Aggregator] Diagnosis: ${diagnosisId} | Aggregated into ${aggregatedDiseases.length} unique diseases`,
       );
 
       const maxRecords =
@@ -253,20 +208,19 @@ export class DiagnosisProcessor extends WorkerHost {
             3,
         ) || 3;
 
-      // 1. Giữ toàn bộ text records (áp dụng trần an toàn maxRecords để bảo vệ token)
-      const textRecords =
-        relevantDiseases.length > maxRecords
-          ? relevantDiseases.slice(0, maxRecords)
-          : relevantDiseases;
+      const targetDiseases =
+        aggregatedDiseases.length > maxRecords
+          ? aggregatedDiseases.slice(0, maxRecords)
+          : aggregatedDiseases;
 
-      // 2. Chọn các mẫu ảnh đại diện bằng Diversity Sampling (Round-Robin theo pestDisease & severityLevel)
-      const recordsToFetchImages = selectDiverseImages(textRecords, maxImages);
+      // 3. Chọn các mẫu ảnh đại diện bằng Diversity Sampling (Round-Robin)
+      const recordsToFetchImages = selectDiverseImages(targetDiseases, maxImages);
 
       this.logger.log(
-        `[Diversity Sampling] Diagnosis: ${diagnosisId} | Selected ${recordsToFetchImages.length}/${textRecords.length} diverse reference images`,
+        `[Diversity Sampling] Diagnosis: ${diagnosisId} | Selected ${recordsToFetchImages.length}/${targetDiseases.length} diverse reference images`,
       );
 
-      // 3. Tải và resize ảnh song song có kiểm soát concurrency (mặc định 3 luồng)
+      // 4. Tải và resize ảnh song song có kiểm soát concurrency (mặc định 3 luồng)
       const imageMap = new Map<string, string>();
       await mapConcurrent(recordsToFetchImages, concurrency, async (record) => {
         if (record.imageUrls && record.imageUrls.length > 0) {
@@ -279,17 +233,22 @@ export class DiagnosisProcessor extends WorkerHost {
         }
       });
 
-      // 4. Cấu trúc referenceData với nhãn ID rõ ràng để AI đối chiếu chính xác
-      const referenceData: ReferenceData[] = textRecords.map((d, index) => {
+      // 5. Cấu trúc referenceData sạch sẽ, tinh gọn (~3.500 tokens)
+      const referenceData: ReferenceData[] = targetDiseases.map((d, index) => {
         const b64 = imageMap.get(d.id) || null;
         const hasImgNotice = b64
           ? ' [CÓ ẢNH ĐỐI CHỨNG ĐÍNH KÈM BÊN DƯỚI]'
           : ' [CHỈ THAM KHẢO MÔ TẢ TRIỆU CHỨNG VĂN BẢN]';
-        const text = `[Mẫu tham chiếu #${index + 1}${hasImgNotice}]\n- Bệnh: ${d.detail} (${d.pestDisease})\n- Mức độ: ${d.severityLevel}\n- Mô tả triệu chứng: ${d.description}\n- Giải pháp điều trị: ${d.vfcSolution}`;
+        const pestNotice = d.pestDisease ? ` (${d.pestDisease})` : '';
+        const stagesNotice =
+          d.stagesCovered && d.stagesCovered.length > 0
+            ? `\n- Giai đoạn thường gặp: ${d.stagesCovered.join(', ')}`
+            : '';
+        const text = `[Mẫu tham chiếu #${index + 1}${hasImgNotice}]\n- Bệnh: ${d.detail}${pestNotice}${stagesNotice}\n- Triệu chứng nhận diện: ${d.description}\n- Giải pháp VFC:\n  ${d.vfcSolution}`;
         return { text, base64Image: b64 };
       });
 
-      const promptText = this.aiEngine.buildPrompt(cropType);
+      const promptText = this.aiEngine.buildPrompt(cropType, allowedStages);
 
       const parsed = await this.aiRouter.diagnoseWithFallback({
         userImages: base64Images,
@@ -317,15 +276,20 @@ export class DiagnosisProcessor extends WorkerHost {
         }
       }
 
-      // Save result to DB
+      // Save result to DB (lưu growthStage do AI nhận diện vào rawAiResponse để phục vụ Admin & Client)
       await this.prisma.diagnosisSuggestion.deleteMany({
         where: { diagnosisId },
       });
 
+      const finalAiResponse = {
+        ...parsed,
+        growthStage: parsed.growthStage || growthStage || null,
+      };
+
       await this.prisma.plantDiagnosis.update({
         where: { id: diagnosisId },
         data: {
-          rawAiResponse: parsed as unknown as Prisma.JsonObject,
+          rawAiResponse: finalAiResponse as unknown as Prisma.JsonObject,
           summary: parsed.summary,
           confidence: parsed.confidence,
           status: DiagnosisStatus.DONE,
@@ -340,7 +304,7 @@ export class DiagnosisProcessor extends WorkerHost {
       });
 
       this.logger.log(
-        `[AI Diagnosis Complete] Diagnosis: ${diagnosisId} | Disease: ${parsed.disease} | Suggestions: ${validProductIds.length}`,
+        `[AI Diagnosis Complete] Diagnosis: ${diagnosisId} | Disease: ${parsed.disease} | Stage: ${parsed.growthStage || 'N/A'} | Suggestions: ${validProductIds.length}`,
       );
     } catch (err: any) {
       this.logger.error(

@@ -16,6 +16,7 @@ export interface ReferenceData {
 export interface DiagnosisResult {
   disease?: string;
   severity?: string;
+  growthStage?: string | null;
   summary?: string;
   confidence?: number;
   vfcSolutionText?: string;

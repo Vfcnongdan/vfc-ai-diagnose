@@ -8,6 +8,7 @@ export const SolutionSetSchema = z.object({
 export const DiagnosisResultSchema = z.object({
   disease: z.string().optional().default('Không xác định'),
   severity: z.string().optional().default('Trung bình'),
+  growthStage: z.string().nullable().optional(),
   summary: z.string().optional().default(''),
   confidence: z.number().min(0).max(1).optional().default(0.8),
   vfcSolutionText: z.string().optional(),
