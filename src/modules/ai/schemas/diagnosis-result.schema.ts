@@ -10,7 +10,7 @@ export const DiagnosisResultSchema = z.object({
   severity: z.string().optional().default('Trung bình'),
   growthStage: z.string().nullable().optional(),
   summary: z.string().optional().default(''),
-  confidence: z.number().min(0).max(1).optional().default(0.8),
+  confidence: z.number().min(0).max(1).optional().default(0.5),
   vfcSolutionText: z.string().optional(),
   solutionSets: z.array(SolutionSetSchema).optional(),
   suggestedProducts: z.array(z.string()).optional(),
