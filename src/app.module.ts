@@ -5,6 +5,7 @@ import { LoggerModule } from 'nestjs-pino';
 
 import { getRedisConnectionOptions } from './config/redis.config';
 import { aiConfig } from './config/ai.config';
+import { googleDriveConfig } from './config/google-drive.config';
 import { SecurityModule } from './common/security/security.module';
 import { PrismaModule } from './modules/prisma/prisma.module';
 import { DiagnosisModule } from './modules/diagnosis/diagnosis.module';
@@ -12,13 +13,14 @@ import { AIModule } from './modules/ai/ai.module';
 import { ImageModule } from './modules/image/image.module';
 import { StorageModule } from './modules/storage/storage.module';
 import { HealthModule } from './modules/health/health.module';
+import { GoogleDriveModule } from './modules/google-drive/google-drive.module';
 
 @Module({
   imports: [
     // Global environment config with custom typed loaders
     ConfigModule.forRoot({
       isGlobal: true,
-      load: [aiConfig],
+      load: [aiConfig, googleDriveConfig],
     }),
 
     // Structured logging with Pino
@@ -49,6 +51,7 @@ import { HealthModule } from './modules/health/health.module';
     ImageModule,
     StorageModule,
     HealthModule,
+    GoogleDriveModule,
   ],
 })
 export class AppModule {}

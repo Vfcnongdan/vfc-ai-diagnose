@@ -5,11 +5,13 @@ import { DiagnosisService } from './diagnosis.service';
 import { DiagnosisProcessor } from './diagnosis.processor';
 import { ImageModule } from '../image/image.module';
 import { AIModule } from '../ai/ai.module';
+import { GoogleDriveModule } from '../google-drive/google-drive.module';
 
 @Module({
   imports: [
     ImageModule,
     AIModule,
+    GoogleDriveModule,
     BullModule.registerQueue({
       name: 'diagnosis',
       defaultJobOptions: {

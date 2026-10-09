@@ -1,5 +1,5 @@
-import { Processor, WorkerHost } from '@nestjs/bullmq';
-import { Job } from 'bullmq';
+import { Processor, WorkerHost, InjectQueue } from '@nestjs/bullmq';
+import { Job, Queue } from 'bullmq';
 import { Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { DiagnosisStatus, Prisma } from '@prisma/client';
@@ -33,6 +33,7 @@ export class DiagnosisProcessor extends WorkerHost {
     private aiEngine: AIEngineService,
     private aiRouter: AIRouterService,
     private config: ConfigService,
+    @InjectQueue('google-drive-sync') private driveQueue: Queue,
   ) {
     super();
   }
@@ -306,6 +307,46 @@ export class DiagnosisProcessor extends WorkerHost {
       this.logger.log(
         `[AI Diagnosis Complete] Diagnosis: ${diagnosisId} | Disease: ${parsed.disease} | Stage: ${parsed.growthStage || 'N/A'} | Suggestions: ${validProductIds.length}`,
       );
+
+      // ─── Đồng bộ ca bệnh có vấn đề lên Google Drive (100% Async Non-blocking) ──
+      const isNoSolution = validProductIds.length === 0;
+      const isLowConfidence =
+        typeof parsed.confidence === 'number' && parsed.confidence < 0.6;
+
+      if (
+        (isNoSolution || isLowConfidence) &&
+        base64Images &&
+        base64Images.length > 0
+      ) {
+        const caseType = isNoSolution ? 'NO_SOLUTION' : 'LOW_CONFIDENCE';
+        this.logger.log(
+          `[Google Drive Trigger] Enqueuing background sync for diagnosis: ${diagnosisId} | Case: ${caseType}`,
+        );
+
+        this.driveQueue
+          .add(
+            'upload-problematic-case',
+            {
+              diagnosisId,
+              cropType,
+              growthStage: finalAiResponse.growthStage || undefined,
+              disease: parsed.disease || 'Chưa xác định',
+              confidence: parsed.confidence,
+              caseType,
+              summary: parsed.summary,
+              base64Image: base64Images[0],
+            },
+            {
+              attempts: 3,
+              backoff: { type: 'exponential', delay: 5000 },
+            },
+          )
+          .catch((err) => {
+            this.logger.error(
+              `[Google Drive Trigger] Failed to enqueue drive sync job for ${diagnosisId}: ${err.message}`,
+            );
+          });
+      }
     } catch (err: any) {
       this.logger.error(
         `[AI Diagnosis Error] Diagnosis: ${diagnosisId}: ${err.message}`,

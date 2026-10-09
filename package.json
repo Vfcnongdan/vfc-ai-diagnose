@@ -8,7 +8,7 @@
   "scripts": {
     "dev": "nest start --watch",
     "dev:worker": "ts-node src/worker.ts",
-    "build": "nest build",
+    "build": "node --max-old-space-size=4096 node_modules/@nestjs/cli/bin/nest.js build",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
     "start": "nest start",
     "start:dev": "nest start --watch",
@@ -36,6 +36,7 @@
     "@prisma/client": "^7.9.1",
     "bullmq": "^6.2.0",
     "cuid": "^3.0.0",
+    "googleapis": "^185.0.0",
     "ioredis": "^6.0.0",
     "nestjs-pino": "^4.6.1",
     "nestjs-zod": "^5.5.0",
