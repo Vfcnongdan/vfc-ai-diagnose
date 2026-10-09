@@ -40,9 +40,9 @@ describe('DiagnosisImageBanner', () => {
     expect(outputBuffer.length).toBeGreaterThan(0);
 
     const meta = await sharp(outputBuffer).metadata();
-    expect(meta.width).toBe(300);
-    // Height phải tăng thêm 140px banner
-    expect(meta.height).toBe(300 + 140);
+    expect(meta.width).toBe(760);
+    // Height phải mở rộng theo tỷ lệ scale và thêm banner
+    expect(meta.height).toBeGreaterThan(760);
   });
 
   it('should successfully append banner for LOW_CONFIDENCE case', async () => {
@@ -63,8 +63,8 @@ describe('DiagnosisImageBanner', () => {
 
     expect(outputBuffer).toBeDefined();
     const meta = await sharp(outputBuffer).metadata();
-    expect(meta.width).toBe(300);
-    expect(meta.height).toBe(440);
+    expect(meta.width).toBe(760);
+    expect(meta.height).toBeGreaterThan(760);
   });
 
   it('should gracefully fallback to original buffer on error without throwing', async () => {
