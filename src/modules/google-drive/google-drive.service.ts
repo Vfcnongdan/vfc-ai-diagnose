@@ -1,7 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { google, drive_v3 } from 'googleapis';
-import { Readable } from 'stream';
 import { normalizeStr } from '../../common/utils/string';
 import {
   attachDiagnosisBannerToImage,
@@ -22,88 +20,8 @@ export interface ProblematicDiagnosisUploadParams {
 @Injectable()
 export class GoogleDriveService {
   private readonly logger = new Logger(GoogleDriveService.name);
-  private driveClient: drive_v3.Drive | null = null;
-  private isClientInitialized = false;
 
   constructor(private config: ConfigService) {}
-
-  /**
-   * Khởi tạo authenticated Google Drive client (Lazy-init, tái sử dụng kết nối)
-   */
-  private getDriveClient(): drive_v3.Drive | null {
-    if (this.isClientInitialized) {
-      return this.driveClient;
-    }
-
-    try {
-      const enabled =
-        this.config.get('ENABLE_GOOGLE_DRIVE_SYNC') !== 'false' &&
-        this.config.get('enableGoogleDriveSync') !== false;
-
-      if (!enabled) {
-        this.logger.log('[GoogleDriveService] Google Drive Sync is disabled by configuration.');
-        this.isClientInitialized = true;
-        this.driveClient = null;
-        return null;
-      }
-
-      // Hỗ trợ cả 3 cách truyền key:
-      // 1. GOOGLE_SERVICE_ACCOUNT_EMAIL + GOOGLE_PRIVATE_KEY
-      // 2. GOOGLE_SERVICE_ACCOUNT_JSON (toàn bộ nội dung JSON key)
-      // 3. GOOGLE_APPLICATION_CREDENTIALS (đường dẫn tới file key.json)
-      const rawJson = this.config.get('GOOGLE_SERVICE_ACCOUNT_JSON');
-      let clientEmail =
-        this.config.get('GOOGLE_SERVICE_ACCOUNT_EMAIL') ||
-        this.config.get('googleServiceAccountEmail');
-      let privateKey =
-        this.config.get('GOOGLE_PRIVATE_KEY') ||
-        this.config.get('googlePrivateKey');
-      const keyFilePath =
-        this.config.get('GOOGLE_APPLICATION_CREDENTIALS') ||
-        this.config.get('googleApplicationCredentials');
-
-      if (rawJson) {
-        try {
-          const parsed = JSON.parse(rawJson);
-          clientEmail = clientEmail || parsed.client_email;
-          privateKey = privateKey || parsed.private_key;
-        } catch (e: any) {
-          this.logger.warn(`[GoogleDriveService] Failed to parse GOOGLE_SERVICE_ACCOUNT_JSON: ${e.message}`);
-        }
-      }
-
-      let auth;
-      if (clientEmail && privateKey) {
-        auth = new google.auth.JWT({
-          email: clientEmail,
-          key: privateKey.replace(/\\n/g, '\n'),
-          scopes: ['https://www.googleapis.com/auth/drive.file'],
-        });
-      } else if (keyFilePath) {
-        auth = new google.auth.GoogleAuth({
-          keyFile: keyFilePath,
-          scopes: ['https://www.googleapis.com/auth/drive.file'],
-        });
-      } else {
-        this.logger.warn(
-          '[GoogleDriveService] Google Service Account credentials not provided. Google Drive Sync will remain in standby mode until credentials are set.',
-        );
-        this.isClientInitialized = true;
-        this.driveClient = null;
-        return null;
-      }
-
-      this.driveClient = google.drive({ version: 'v3', auth });
-      this.isClientInitialized = true;
-      this.logger.log('[GoogleDriveService] Google Drive client successfully initialized.');
-      return this.driveClient;
-    } catch (err: any) {
-      this.logger.error(`[GoogleDriveService] Failed to initialize Google Drive client: ${err.message}`);
-      this.isClientInitialized = true;
-      this.driveClient = null;
-      return null;
-    }
-  }
 
   /**
    * Tạo tên file chuẩn hóa, nhìn lướt trên Google Drive là nhận diện ngay
@@ -119,7 +37,6 @@ export class GoogleDriveService {
 
     const now = new Date();
     const dateStr = `${now.getFullYear()}-${(now.getMonth() + 1).toString().padStart(2, '0')}-${now.getDate().toString().padStart(2, '0')}`;
-
     const shortId = params.diagnosisId.slice(-8);
 
     if (params.caseType === 'NO_SOLUTION') {
@@ -131,33 +48,41 @@ export class GoogleDriveService {
   }
 
   /**
-   * Upload ca chẩn đoán có vấn đề lên thư mục Google Drive chuyên dụng
+   * Đồng bộ ca chẩn đoán có vấn đề lên Google Drive thông qua Google Apps Script Webhook.
+   * Chạy dưới quyền tài khoản Google cá nhân của người dùng, sử dụng 15GB miễn phí mà không bị lỗi Service Account Quota.
    */
   async uploadProblematicDiagnosis(
     params: ProblematicDiagnosisUploadParams,
   ): Promise<{ fileId: string; webViewLink?: string } | null> {
-    const drive = this.getDriveClient();
-    if (!drive) {
+    const enabled =
+      this.config.get('ENABLE_GOOGLE_DRIVE_SYNC') !== 'false' &&
+      this.config.get('enableGoogleDriveSync') !== false;
+
+    if (!enabled) {
       this.logger.log(
-        `[GoogleDriveService] Skipping Drive upload for ${params.diagnosisId} (Service Account not configured).`,
+        '[GoogleDriveService] Google Drive Sync is disabled by configuration.',
       );
       return null;
     }
+
+    const webhookUrl =
+      this.config.get('GOOGLE_DRIVE_WEBHOOK_URL') ||
+      this.config.get('googleDriveWebhookUrl');
 
     const folderId =
       this.config.get('GOOGLE_DRIVE_FOLDER_ID') ||
       this.config.get('googleDriveFolderId');
 
-    if (!folderId) {
-      this.logger.warn(
-        `[GoogleDriveService] GOOGLE_DRIVE_FOLDER_ID is missing. Cannot upload ${params.diagnosisId}.`,
+    if (!webhookUrl) {
+      this.logger.log(
+        `[GoogleDriveService] GOOGLE_DRIVE_WEBHOOK_URL not configured. Skipping Drive sync for ${params.diagnosisId}.`,
       );
       return null;
     }
 
     try {
       this.logger.log(
-        `[GoogleDriveService] Uploading problematic diagnosis to Drive | ID: ${params.diagnosisId} | Case: ${params.caseType} | Disease: ${params.disease}`,
+        `[GoogleDriveService] Uploading problematic diagnosis via Webhook | ID: ${params.diagnosisId} | Case: ${params.caseType} | Disease: ${params.disease}`,
       );
 
       // 1. Chuyển base64 sang Buffer
@@ -167,7 +92,7 @@ export class GoogleDriveService {
       );
       const rawBuffer = Buffer.from(cleanBase64, 'base64');
 
-      // 2. Chèn banner thông tin vào ảnh
+      // 2. Chèn banner thông tin lâm sàng vào ảnh
       const bannerParams: DiagnosisBannerParams = {
         cropType: params.cropType,
         growthStage: params.growthStage,
@@ -182,7 +107,7 @@ export class GoogleDriveService {
         bannerParams,
       );
 
-      // 3. Tạo tên file & metadata
+      // 3. Tạo tên file & mô tả chi tiết
       const fileName = this.generateFileName(params);
       const description = [
         `=== CA CHẨN ĐOÁN CẦN THẨM ĐỊNH (${params.caseType}) ===`,
@@ -196,41 +121,51 @@ export class GoogleDriveService {
         `- Thời gian: ${new Date().toISOString()}`,
       ].join('\n');
 
-      // 4. Gọi API Google Drive
-      const res = await drive.files.create({
-        requestBody: {
-          name: fileName,
-          parents: [folderId],
+      // 4. Bắn HTTP POST sang Google Apps Script Webhook
+      const response = await fetch(webhookUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          folderId: folderId || '',
+          fileName,
           description,
-          appProperties: {
-            diagnosisId: params.diagnosisId,
-            caseType: params.caseType,
-            cropType: params.cropType || '',
-            disease: params.disease,
-            confidence: String(params.confidence || ''),
-          },
-        },
-        media: {
-          mimeType: 'image/jpeg',
-          body: Readable.from(finalBuffer),
-        },
-        fields: 'id, name, webViewLink',
+          base64Image: finalBuffer.toString('base64'),
+          diagnosisId: params.diagnosisId,
+          caseType: params.caseType,
+          cropType: params.cropType,
+          disease: params.disease,
+          confidence: params.confidence,
+        }),
+        signal: AbortSignal.timeout(45000),
       });
 
-      const fileId = res.data.id || '';
-      const webViewLink = res.data.webViewLink || undefined;
+      if (!response.ok) {
+        throw new Error(
+          `Webhook responded with HTTP status ${response.status} (${response.statusText})`,
+        );
+      }
 
-      this.logger.log(
-        `[GoogleDriveService] Successfully uploaded to Drive! File: ${fileName} | ID: ${fileId} | Link: ${webViewLink || 'N/A'}`,
-      );
+      const data = (await response.json().catch(() => ({}))) as any;
 
-      return { fileId, webViewLink };
+      if (data.status === 'success' || data.fileId) {
+        this.logger.log(
+          `[GoogleDriveService] Successfully uploaded to Drive via Webhook! File: ${fileName} | ID: ${data.fileId || 'N/A'} | Link: ${data.webViewLink || 'N/A'}`,
+        );
+        return {
+          fileId: data.fileId || '',
+          webViewLink: data.webViewLink || undefined,
+        };
+      } else {
+        this.logger.warn(
+          `[GoogleDriveService] Webhook upload failed for ${params.diagnosisId}: ${data.message || JSON.stringify(data)}`,
+        );
+        return null;
+      }
     } catch (err: any) {
       this.logger.error(
-        `[GoogleDriveService] Drive upload failed for ${params.diagnosisId}: ${err.message}`,
+        `[GoogleDriveService] Drive Webhook upload error for ${params.diagnosisId}: ${err.message}`,
         err.stack,
       );
-      // Tuyệt đối không ném lỗi ra ngoài để bảo vệ tiến trình hệ thống
       return null;
     }
   }

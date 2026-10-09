@@ -36,7 +36,6 @@
     "@prisma/client": "^7.9.1",
     "bullmq": "^6.2.0",
     "cuid": "^3.0.0",
-    "googleapis": "^185.0.0",
     "ioredis": "^6.0.0",
     "nestjs-pino": "^4.6.1",
     "nestjs-zod": "^5.5.0",
