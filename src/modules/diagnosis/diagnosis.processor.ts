@@ -299,10 +299,10 @@ export class DiagnosisProcessor extends WorkerHost {
         `[AI Diagnosis Complete] Diagnosis: ${diagnosisId} | Disease: ${parsed.disease} | Stage: ${parsed.growthStage || 'N/A'} | Suggestions: ${validProductIds.length}`,
       );
 
-      // ─── Đồng bộ ca bệnh có vấn đề lên Google Drive (100% Async Non-blocking) ──
+      // ─── Đồng bộ ca bệnh có vấn đề / nghi ngờ lên Google Drive (100% Async Non-blocking) ──
       const isNoSolution = validProductIds.length === 0;
       const isLowConfidence =
-        typeof parsed.confidence === 'number' && parsed.confidence < 0.6;
+        typeof parsed.confidence === 'number' && parsed.confidence < 0.79;
 
       if (
         (isNoSolution || isLowConfidence) &&

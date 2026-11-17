@@ -1,12 +1,15 @@
 import { Injectable, Logger } from '@nestjs/common';
 import sharp from 'sharp';
+import { toDownloadUrls } from '../../common/utils/image-key';
 
 @Injectable()
 export class ImageService {
   private readonly logger = new Logger(ImageService.name);
 
   /**
-   * Tải ảnh tham khảo từ URL (Google Drive, Cloud...) + resize nhỏ lại (256x256, q=60) để gửi cho AI.
+   * Tải ảnh tham khảo từ URL (Google Drive, Cloud...) + resize nhỏ lại để gửi cho AI.
+   * Tự động thử lần lượt link trực tiếp (lh3) rồi fallback sang Google Drive Thumbnail
+   * để xử lý cả ảnh gốc định dạng HEIC/TIFF hoặc trang HTML preview của Google Drive.
    */
   async fetchAndOptimize(
     rawUrl: string,
@@ -14,43 +17,43 @@ export class ImageService {
   ): Promise<string | null> {
     const size = options.size ?? 256;
     const quality = options.quality ?? 60;
-    try {
-      let url = rawUrl
-        .trim()
-        .replace(/^\{|\}$|^\[|\]$/g, '')
-        .replace(/^"|"$/g, '')
-        .replace(/^'|'$/g, '')
-        .trim();
+    const candidateUrls = toDownloadUrls(rawUrl);
+    let lastError: unknown = null;
 
-      // Chuyển đổi Google Drive share/view links → direct download link
-      if (url.includes('drive.google.com')) {
-        const fileMatch = url.match(/\/file\/d\/([^/?\s]+)/);
-        if (fileMatch) {
-          url = `https://lh3.googleusercontent.com/d/${fileMatch[1]}`;
-        } else {
-          const ucMatch = url.match(/[?&]id=([^&\s]+)/);
-          if (ucMatch) {
-            url = `https://lh3.googleusercontent.com/d/${ucMatch[1]}`;
-          }
+    for (const url of candidateUrls) {
+      try {
+        const res = await fetch(url, {
+          redirect: 'follow',
+          headers: { 'User-Agent': 'Mozilla/5.0' },
+          signal: AbortSignal.timeout(20_000),
+        });
+        if (!res.ok) {
+          lastError = `HTTP ${res.status}`;
+          continue;
         }
+        const contentType = res.headers.get('content-type') ?? '';
+        if (contentType && !contentType.startsWith('image/')) {
+          lastError = `Non-image content-type: ${contentType}`;
+          continue;
+        }
+
+        const arrayBuffer = await res.arrayBuffer();
+        const buffer = await sharp(Buffer.from(arrayBuffer))
+          .resize(size, size, { fit: 'inside', withoutEnlargement: true })
+          .jpeg({ quality })
+          .toBuffer();
+
+        return buffer.toString('base64');
+      } catch (err) {
+        lastError = err;
       }
-
-      const res = await fetch(url);
-      if (!res.ok) {
-        this.logger.warn(`Failed to fetch image HTTP ${res.status}: ${url}`);
-        return null;
-      }
-
-      const arrayBuffer = await res.arrayBuffer();
-      const buffer = await sharp(Buffer.from(arrayBuffer))
-        .resize(size, size, { fit: 'inside', withoutEnlargement: true })
-        .jpeg({ quality })
-        .toBuffer();
-
-      return buffer.toString('base64');
-    } catch (err) {
-      this.logger.error(`Failed to fetch/optimize ref image: ${rawUrl}`, err);
-      return null;
     }
+
+    this.logger.warn(
+      `Failed to fetch/optimize ref image after ${candidateUrls.length} URL(s): ${rawUrl} (${
+        lastError instanceof Error ? lastError.message : String(lastError)
+      })`,
+    );
+    return null;
   }
 }

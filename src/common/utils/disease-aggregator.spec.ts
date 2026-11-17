@@ -120,4 +120,44 @@ describe('disease-aggregator', () => {
     // Đạo ôn cổ bông thuộc Trổ chín đứng thứ hai nhưng VẪN CÓ MẶT
     expect(aggregated[1].detail).toBe('Đạo ôn cổ bông');
   });
+
+  it('should never pick empty description or "Không có" severity over real symptom descriptions', () => {
+    const raw: RawDiseaseRecord[] = [
+      {
+        id: 'empty-preferred',
+        growthStage: 'Cơi đọt',
+        pestDisease: 'Sâu',
+        detail: 'Đốm rong',
+        severityLevel: 'Trung bình',
+        description: '   ',
+        vfcSolution: 'Xantocin 40WG',
+      },
+      {
+        id: 'healthy-row',
+        growthStage: 'Cơi đọt',
+        pestDisease: 'Bệnh',
+        detail: 'Đốm rong',
+        severityLevel: 'Không có',
+        description: 'Lá giữ màu xanh, dày, sinh trưởng tốt',
+        vfcSolution: 'Champion 57.6DP',
+      },
+      {
+        id: 'valid-other-stage',
+        growthStage: 'Sau thu hoạch',
+        pestDisease: 'Bệnh',
+        detail: 'Đốm rong',
+        severityLevel: 'Trung bình',
+        description: 'Lá xuất hiện các đốm tròn màu cam, bề mặt nhám.',
+        vfcSolution: 'Champion 57.6DP',
+      },
+    ];
+
+    const aggregated = aggregateDiseases(raw, 'Cơi đọt');
+    expect(aggregated).toHaveLength(1);
+    expect(aggregated[0].pestDisease).toBe('Bệnh');
+    expect(aggregated[0].description).toBe(
+      'Lá xuất hiện các đốm tròn màu cam, bề mặt nhám.',
+    );
+    expect(aggregated[0].description).not.toContain('Lá giữ màu xanh');
+  });
 });

@@ -73,24 +73,50 @@ export function aggregateDiseases(
   const aggregated: AggregatedDisease[] = [];
 
   for (const [key, groupRecords] of groups) {
-    // 1. Tìm bản ghi đại diện tốt nhất cho triệu chứng (ưu tiên stage nếu có, rồi đến severity)
-    let bestRecord = groupRecords[0];
-    let bestScore = -1;
-
-    for (const r of groupRecords) {
+    // 1. Tìm bản ghi đại diện tốt nhất cho triệu chứng:
+    //    - Ưu tiên mạnh (+20) bản ghi có mô tả triệu chứng thực sự (không rỗng và không phải mức "Không có")
+    //    - Ưu tiên (+10) bản ghi khớp giai đoạn sinh trưởng đang xét
+    //    - Ưu tiên theo mức độ điển hình (Trung bình > Nặng > Nhẹ)
+    const scoredRecords = groupRecords.map((r) => {
       let score = 0;
+      const sevNorm = normalizeKey(r.severityLevel || '');
+      const hasActiveDesc =
+        typeof r.description === 'string' &&
+        r.description.trim().length > 0 &&
+        sevNorm !== 'không có';
+      if (hasActiveDesc) {
+        score += 20;
+      }
       const rStage = r.growthStage ? normalizeKey(r.growthStage) : '';
       if (normPreferredStage && rStage === normPreferredStage) {
         score += 10;
       }
-      const sRank = severityRank[(r.severityLevel || '').trim().toLowerCase()] ?? 1;
+      const sRank = severityRank[sevNorm] ?? 1;
       score += sRank;
+      return { record: r, score, hasActiveDesc };
+    });
 
-      if (score > bestScore) {
-        bestScore = score;
-        bestRecord = r;
+    scoredRecords.sort((a, b) => b.score - a.score);
+    const bestRecord = scoredRecords[0].record;
+
+    // 1b. Tổng hợp tối đa 3 mô tả triệu chứng khác biệt (bỏ qua dòng rỗng và mức "Không có")
+    //     để không làm rơi mất đặc điểm nhận diện quan trọng ở các mức độ/giai đoạn khác.
+    const distinctDescs: string[] = [];
+    const seenDescNorm = new Set<string>();
+    for (const item of scoredRecords) {
+      if (!item.hasActiveDesc) continue;
+      const clean = item.record.description.trim().replace(/\s+/g, ' ');
+      const norm = clean.toLowerCase();
+      if (!seenDescNorm.has(norm)) {
+        seenDescNorm.add(norm);
+        distinctDescs.push(clean);
+        if (distinctDescs.length >= 3) break;
       }
     }
+    const consolidatedDescription =
+      distinctDescs.length > 0
+        ? distinctDescs.join(' ; ')
+        : (bestRecord.description || '').trim();
 
     // 2. Gom và khử trùng lặp các giải pháp VFC theo mức độ
     // Map: solutionString -> Set<severityLevel>
@@ -151,7 +177,7 @@ export function aggregateDiseases(
       detail: bestRecord.detail,
       pestDisease: bestRecord.pestDisease,
       severityLevel: bestRecord.severityLevel || 'Trung bình',
-      description: bestRecord.description,
+      description: consolidatedDescription,
       vfcSolution: consolidatedSolution,
       imageUrls: allImages,
       stagesCovered: stages,
